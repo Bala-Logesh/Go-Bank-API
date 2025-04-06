@@ -27,14 +27,16 @@ if [[ $METHOD == 'get' && -n $ID ]]; then
 fi
 
 # Create a new contact
-if [ $METHOD == 'post' ]; then
+if [ $METHOD == 'post1' ]; then
     curl -X POST $URL \
         -H "Content-Type: application/json" \
         -d '{
             "firstName": "John",
             "lastName": "Doe"
         }'
+fi
 
+if [ $METHOD == 'post2' ]; then
     curl -X POST $URL \
         -H "Content-Type: application/json" \
         -d '{

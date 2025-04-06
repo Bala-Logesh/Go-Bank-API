@@ -3,6 +3,8 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"os"
 
 	_ "github.com/lib/pq"
 )
@@ -20,8 +22,12 @@ type PostgresStore struct {
 }
 
 func NewPostgresStore() (*PostgresStore, error) {
-	// connStr := "user=postgres dbname=postgres password=password sslmode=disable"
-	connStr := "user=postgres password=password dbname=postgres sslmode=disable"
+	log.Println("Connecting to database")
+	connStr := os.Getenv("POSTGRES_URL")
+	if len(connStr) == 0 {
+		log.Fatalf("POSTGRES_URL environment variable is not set")
+	}
+
 	db, err := sql.Open("postgres", connStr)
 
 	if err != nil {
@@ -31,6 +37,8 @@ func NewPostgresStore() (*PostgresStore, error) {
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
+
+	log.Println("Connected to Postgres DB")
 
 	return &PostgresStore{
 		db: db,
