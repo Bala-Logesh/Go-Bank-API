@@ -36,7 +36,7 @@ func (s *APIServer) Run() {
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello there form server!!")
+	fmt.Fprintf(w, "Hello there from server!!")
 }
 
 func (s *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error {
@@ -132,7 +132,7 @@ func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error
 // Helper functions
 func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	w.WriteHeader(status)
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-type", "application/json")
 	return json.NewEncoder(w).Encode(v)
 }
 
@@ -142,7 +142,7 @@ type ApiError struct {
 	Error string `json:"error"`
 }
 
-// This method decorates the functions that we have which are of the type apiFunc into type http.HnadlerFunc that the mux router expects
+// This method decorates the functions that we have which are of the type apiFunc into type http.Handler that the http HandleFunc expects
 func makeHTTPHandlerFunc(f apiFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := f(w, r); err != nil {
