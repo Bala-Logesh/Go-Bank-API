@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	_ "github.com/lib/pq"
 )
@@ -12,10 +13,11 @@ import (
 type Storage interface {
 	CreateAccount(*Account) error
 	DeleteAccount(int) error
-	UpdateAccount(*Account) error
+	UpdateAccount(*Account, string, string, string) error
+	UpdateAccountBalance(*Account) error
 	GetAccounts() ([]*Account, error)
 	GetAccountByID(int) (*Account, error)
-	GetAccountByNumber(int) (*Account, error)
+	GetAccountByNumber(int64) (*Account, error)
 }
 
 type PostgresStore struct {
@@ -85,7 +87,53 @@ func (s *PostgresStore) CreateAccount(acc *Account) error {
 	return nil
 }
 
-func (s *PostgresStore) UpdateAccount(*Account) error {
+func (s *PostgresStore) UpdateAccount(acc *Account, firstName, lastName, password string) error {
+	setClauses := []string{}
+	args := []interface{}{}
+	argID := 1
+
+	if firstName != "" {
+		setClauses = append(setClauses, fmt.Sprintf("first_name = $%d", argID))
+		args = append(args, firstName)
+		argID++
+	}
+	if lastName != "" {
+		setClauses = append(setClauses, fmt.Sprintf("last_name = $%d", argID))
+		args = append(args, lastName)
+		argID++
+	}
+	if password != "" {
+		setClauses = append(setClauses, fmt.Sprintf("password = $%d", argID))
+		args = append(args, password)
+		argID++
+	}
+
+	if len(setClauses) == 0 {
+		return fmt.Errorf("no fields to update")
+	}
+
+	query := fmt.Sprintf(`UPDATE account SET %s WHERE id = $%d`,
+		strings.Join(setClauses, ", "), argID)
+
+	args = append(args, acc.ID)
+
+	_, err := s.db.Exec(query, args...)
+	return err
+}
+
+func (s *PostgresStore) UpdateAccountBalance(acc *Account) error {
+	query := `update account set
+		balance = $1
+	where id = $2`
+
+	resp, err := s.db.Exec(query, acc.Balance, acc.ID)
+
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Account Balance updated: %+v\n", resp)
+
 	return nil
 }
 
@@ -137,7 +185,7 @@ func (s *PostgresStore) GetAccountByID(id int) (*Account, error) {
 	return nil, fmt.Errorf("account %d not found", id)
 }
 
-func (s *PostgresStore) GetAccountByNumber(number int) (*Account, error) {
+func (s *PostgresStore) GetAccountByNumber(number int64) (*Account, error) {
 	query := "select * from account where number = $1"
 
 	rows, err := s.db.Query(query, number)

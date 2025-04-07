@@ -19,8 +19,14 @@ type CreateOrLoginResponse struct {
 }
 
 type TransferRequest struct {
-	ToAccount int `json:"toAccount"`
-	Amount    int `json:"amount"`
+	ToAccount int64 `json:"toAccount"`
+	Amount    int64 `json:"amount"`
+}
+
+type TransferResponse struct {
+	Number     int64 `json:"number"`
+	OldBalance int64 `json:"OldBalance"`
+	NewBalance int64 `json:"NewBalance"`
 }
 
 type CreateAccountRequest struct {
@@ -64,3 +70,5 @@ type apiFunc func(http.ResponseWriter, *http.Request) error
 type ApiError struct {
 	Error string `json:"error"`
 }
+
+type claimsKey string

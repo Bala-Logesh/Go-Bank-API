@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -32,7 +33,9 @@ func (s *APIServer) Run() {
 	router.HandleFunc("/login", makeHTTPHandlerFunc(s.handleLogin))
 	router.HandleFunc("/account", makeHTTPHandlerFunc(s.handleAccount))
 	router.HandleFunc("/account/{id}", withJWTAuth(makeHTTPHandlerFunc(s.handleAccountWithID), s.store))
-	router.HandleFunc("/transfer", makeHTTPHandlerFunc(s.handleTransfer))
+	router.HandleFunc("/deposit/{id}", withJWTAuth(makeHTTPHandlerFunc(s.handleDepositMoney), s.store))
+	router.HandleFunc("/withdraw/{id}", withJWTAuth(makeHTTPHandlerFunc(s.handleWithdrawMoney), s.store))
+	router.HandleFunc("/transfer/{id}", withJWTAuth(makeHTTPHandlerFunc(s.handleTransfer), s.store))
 
 	log.Println("JSON API server running on port", s.listenAddr)
 
@@ -104,7 +107,7 @@ func (s *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	acc, err := s.store.GetAccountByNumber(int(req.Number))
+	acc, err := s.store.GetAccountByNumber(req.Number)
 
 	if err != nil {
 		return err
@@ -183,6 +186,82 @@ func (s *APIServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) 
 	return WriteJSON(w, http.StatusOK, map[string]int{"deleted": id})
 }
 
+func (s *APIServer) handleDepositMoney(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		Amount int64 `json:"amount"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return fmt.Errorf("invalid amount given: %v", err)
+	}
+
+	number := getAccountFromCxt(r)
+	acc, err := s.store.GetAccountByNumber(number)
+
+	if err != nil {
+		return err
+	}
+
+	oldBalance := acc.Balance
+
+	defer r.Body.Close()
+
+	newBalance, err := modifyAccountBalance(s.store, acc, body.Amount)
+
+	if err != nil {
+		WriteJSON(w, http.StatusInternalServerError, ApiError{Error: "Something went wrong"})
+		return err
+	}
+
+	transferResp := TransferResponse{
+		Number:     number,
+		OldBalance: oldBalance,
+		NewBalance: newBalance,
+	}
+
+	return WriteJSON(w, http.StatusOK, transferResp)
+}
+
+func (s *APIServer) handleWithdrawMoney(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		Amount int64 `json:"amount"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return fmt.Errorf("invalid amount given: %v", err)
+	}
+
+	number := getAccountFromCxt(r)
+	acc, err := s.store.GetAccountByNumber(number)
+
+	if err != nil {
+		return err
+	}
+
+	oldBalance := acc.Balance
+
+	defer r.Body.Close()
+
+	if oldBalance < body.Amount {
+		return WriteJSON(w, http.StatusBadRequest, ApiError{Error: "Insufficient Balance"})
+	}
+
+	newBalance, err := modifyAccountBalance(s.store, acc, -1*body.Amount)
+
+	if err != nil {
+		WriteJSON(w, http.StatusInternalServerError, ApiError{Error: "Something went wrong"})
+		return err
+	}
+
+	transferResp := TransferResponse{
+		Number:     number,
+		OldBalance: oldBalance,
+		NewBalance: newBalance,
+	}
+
+	return WriteJSON(w, http.StatusOK, transferResp)
+}
+
 func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
 	transferReq := new(TransferRequest)
 
@@ -190,9 +269,50 @@ func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 
+	number := getAccountFromCxt(r)
+	fromAccount, err := s.store.GetAccountByNumber(number)
+
+	if err != nil {
+		return err
+	}
+
 	defer r.Body.Close()
 
-	return WriteJSON(w, http.StatusOK, transferReq)
+	oldBalance := fromAccount.Balance
+
+	if fromAccount.Balance < transferReq.Amount {
+		return WriteJSON(w, http.StatusBadRequest, ApiError{Error: "Insufficient Balance"})
+	}
+
+	if fromAccount.Number == int64(transferReq.ToAccount) {
+		return WriteJSON(w, http.StatusBadRequest, ApiError{Error: "Cannot transfer money to the same account"})
+	}
+
+	toAccount, err := s.store.GetAccountByNumber(transferReq.ToAccount)
+
+	if err != nil {
+		return err
+	}
+
+	newBalance, err := modifyAccountBalance(s.store, fromAccount, -1*transferReq.Amount)
+
+	if err != nil {
+		return WriteJSON(w, http.StatusInternalServerError, ApiError{Error: "Something went wrong"})
+	}
+
+	_, err = modifyAccountBalance(s.store, toAccount, transferReq.Amount)
+
+	if err != nil {
+		return WriteJSON(w, http.StatusInternalServerError, ApiError{Error: "Something went wrong"})
+	}
+
+	transferResp := TransferResponse{
+		Number:     fromAccount.Number,
+		OldBalance: oldBalance,
+		NewBalance: newBalance,
+	}
+
+	return WriteJSON(w, http.StatusOK, transferResp)
 }
 
 // Helper functions
@@ -232,6 +352,7 @@ func withJWTAuth(handlerFunc http.HandlerFunc, s Storage) http.HandlerFunc {
 		userID, err := getID(r)
 
 		if err != nil {
+			fmt.Println(err)
 			permissionDenied(w)
 			return
 		}
@@ -249,7 +370,11 @@ func withJWTAuth(handlerFunc http.HandlerFunc, s Storage) http.HandlerFunc {
 			return
 		}
 
-		handlerFunc(w, r)
+		claimskey := claimsKey("accountNumber")
+
+		ctx := context.WithValue(r.Context(), claimskey, account.Number)
+
+		handlerFunc(w, r.WithContext(ctx))
 	}
 }
 
@@ -295,6 +420,26 @@ func getID(r *http.Request) (int, error) {
 	return id, nil
 }
 
+func getAccountFromCxt(r *http.Request) int64 {
+	claimsKey := claimsKey("accountNumber")
+
+	number := r.Context().Value(claimsKey).(int64)
+
+	return number
+}
+
 func permissionDenied(w http.ResponseWriter) {
 	WriteJSON(w, http.StatusForbidden, ApiError{Error: "Permission Denied"})
+}
+
+func modifyAccountBalance(s Storage, acc *Account, amount int64) (int64, error) {
+	acc.Balance += amount
+
+	err := s.UpdateAccountBalance(acc)
+
+	if err != nil {
+		return 0, err
+	}
+
+	return acc.Balance, nil
 }
